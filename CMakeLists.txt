@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.19 FATAL_ERROR)
 
 # Use the new policy for linking to qtmain
 if(POLICY CMP0020)
-#  cmake_policy(SET CMP0020 NEW)
+  #  cmake_policy(SET CMP0020 NEW)
 endif()
 
 # Set CMP0080 to OLD for now for BundleUtilities, this needs porting to NEW.
@@ -33,7 +33,7 @@ set(AvogadroApp_VERSION_MAJOR   "1")
 set(AvogadroApp_VERSION_MINOR   "103")
 set(AvogadroApp_VERSION_PATCH   "0")
 set(AvogadroApp_VERSION
-  "${AvogadroApp_VERSION_MAJOR}.${AvogadroApp_VERSION_MINOR}.${AvogadroApp_VERSION_PATCH}")
+        "${AvogadroApp_VERSION_MAJOR}.${AvogadroApp_VERSION_MINOR}.${AvogadroApp_VERSION_PATCH}")
 find_package(Git)
 determine_version(${AvogadroApp_SOURCE_DIR} ${GIT_EXECUTABLE} "AvogadroApp")
 
@@ -57,6 +57,7 @@ set_property(CACHE QT_VERSION PROPERTY STRINGS 6)
 if(NOT QT_VERSION IN_LIST QT_VERSIONS_SUPPORTED)
   message(FATAL_ERROR "Qt version must be one of ${QT_VERSIONS_SUPPORTED}")
 endif()
+
 option(ENABLE_TESTING "Enable testing and building the tests." OFF)
 
 if(ENABLE_TESTING)
@@ -65,6 +66,19 @@ if(ENABLE_TESTING)
 endif()
 
 option(Avogadro_ENABLE_RPC "Enable RPC server" ON)
+
+# ---------------------------------------------------------------------------
+# Qt setup (needed so CMake can find Qt6 and propagate include dirs to targets)
+# ---------------------------------------------------------------------------
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_AUTOUIC ON)
+set(CMAKE_AUTORCC ON)
+
+# If CMake still can't find Qt on Windows, uncomment and adjust this path:
+# list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.10.2/mingw_64")
+
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+# ---------------------------------------------------------------------------
 
 add_subdirectory(avogadro)
 
@@ -75,11 +89,11 @@ if(BUILD_DOCUMENTATION)
 endif()
 
 install(
-  FILES
-    README.md
-    CONTRIBUTING.md
-    LICENSE
-  DESTINATION "${INSTALL_DOC_DIR}/avogadro2")
+        FILES
+        README.md
+        CONTRIBUTING.md
+        LICENSE
+        DESTINATION "${INSTALL_DOC_DIR}/avogadro2")
 
 include(AvogadroCPack)
 

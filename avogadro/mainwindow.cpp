@@ -2414,6 +2414,26 @@ void MainWindow::buildMenu()
   action = new QAction(tr("Rendering…"), this);
   m_menuBuilder->addAction(viewPath, action, 100);
   connect(action, &QAction::triggered, this, &MainWindow::setRenderingSettings);
+  // View -> Toolbars / Panes
+    // Toolbars submenu
+    QStringList toolbarsPath = viewPath;
+    toolbarsPath << tr("Toolbars");
+
+#ifndef Q_OS_MAC
+    m_menuBuilder->addAction(toolbarsPath, m_fileToolBar->toggleViewAction(),
+                             100);
+#endif
+    m_menuBuilder->addAction(toolbarsPath, m_toolToolBar->toggleViewAction(),
+                             90);
+    // Panes submenu
+    QStringList panesPath = viewPath;
+    panesPath << tr("Panes");
+
+    m_menuBuilder->addAction(panesPath, m_toolDock->toggleViewAction(), 100);
+    m_menuBuilder->addAction(panesPath, m_sceneDock->toggleViewAction(), 90);
+    m_menuBuilder->addAction(panesPath, m_viewDock->toggleViewAction(), 80);
+    m_menuBuilder->addAction(panesPath, m_moleculeDock->toggleViewAction(), 70);
+    m_menuBuilder->addAction(panesPath, m_layerDock->toggleViewAction(), 60);
 
   // set default projection
   QSettings settings;
