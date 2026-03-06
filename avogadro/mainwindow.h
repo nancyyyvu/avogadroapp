@@ -148,6 +148,11 @@ public:
    */
   void checkAutosaveRecovery();
 
+  /**
+   * Scan standard directories for pyproject.toml-based plugin packages.
+   */
+  void loadPackages();
+
   void startAutosaveTimer();
 
   QString autosaveFilePath() const;
@@ -432,6 +437,7 @@ private:
   QStringList m_localeCodes;
 
   MenuBuilder* m_menuBuilder;
+  bool m_initialized = false; ///< true after the initial buildMenu() completes
 
   // These variables take care of background file reading.
   QThread* m_fileReadThread;
@@ -486,6 +492,12 @@ private:
    * Set up the main window widgets, connect signals and slots, etc.
    */
   void setupInterface();
+
+  /**
+   * If the window is not visible on any available screen, move it to the
+   * primary screen. Called on startup and when a screen is removed.
+   */
+  void ensureWindowOnScreen();
 
   /** Show a dialog to remap custom elements, if present. */
   void reassignCustomElements();

@@ -27,12 +27,14 @@
 #include <avogadro/qtgui/molecule.h>
 #include <avogadro/qtgui/moleculemodel.h>
 #include <avogadro/qtgui/multiviewwidget.h>
+#include <avogadro/qtgui/packagemanager.h>
 #include <avogadro/qtgui/periodictableview.h>
 #include <avogadro/qtgui/richtextdelegate.h>
 #include <avogadro/qtgui/rwmolecule.h>
 #include <avogadro/qtgui/sceneplugin.h>
 #include <avogadro/qtgui/scenepluginmodel.h>
 #include <avogadro/qtgui/toolplugin.h>
+#include <avogadro/qtgui/utilities.h>
 #include <avogadro/qtopengl/activeobjects.h>
 #include <avogadro/qtopengl/glwidget.h>
 #include <avogadro/qtplugins/pluginmanager.h>
@@ -315,11 +317,23 @@ MainWindow::MainWindow(const QStringList& fileNames, bool disableSettings)
               this, &MainWindow::setActiveDisplayTypes);
       connect(extension, &QtGui::ExtensionPlugin::registerCommand, this,
               &MainWindow::registerExtensionCommand);
+      connect(extension, &QtGui::ExtensionPlugin::actionsChanged, this,
+              [this, extension]() {
+                buildMenu(extension);
+                if (m_initialized)
+                  m_menuBuilder->buildMenuBar(menuBar());
+              });
       extension->registerCommands();
-
-      buildMenu(extension);
       m_extensions.append(extension);
     }
+  }
+
+  // Scan for pyproject.toml-based plugin packages.
+  loadPackages();
+
+  // now we can build the menus for extensions
+  foreach (ExtensionPlugin* extension, m_extensions) {
+    buildMenu(extension);
   }
 
   // Now set up the interface.
@@ -339,6 +353,7 @@ MainWindow::MainWindow(const QStringList& fileNames, bool disableSettings)
   qDebug() << " building menu ";
 #endif
   buildMenu();
+  m_initialized = true;
 #ifdef Q_OS_WIN
   qDebug() << " updating recent files ";
 #endif
@@ -404,6 +419,10 @@ void MainWindow::setupInterface()
   // We take care of setting up the main interface here, along with any custom
   // pieces that might be added for saved settings etc.
   setAcceptDrops(true); // allow drag-and-drop of files
+
+  connect(qApp, &QGuiApplication::screenRemoved, this,
+          [this](QScreen*) { ensureWindowOnScreen(); });
+
   QSettings settings;
 
   m_multiViewWidget = new QtGui::MultiViewWidget(this);
@@ -889,6 +908,29 @@ void MainWindow::readSettings()
   move(settings.value("pos", QPoint(20, 20)).toPoint());
   settings.endGroup();
   m_recentFiles = settings.value("recentFiles", QStringList()).toStringList();
+
+  ensureWindowOnScreen();
+}
+
+void MainWindow::ensureWindowOnScreen()
+{
+  // If the window is not accessible on any available screen
+  // (e.g. it was on a monitor that is no longer connected),
+  // move it to the primary screen.
+  const QRect windowGeom = frameGeometry();
+  for (const QScreen* screen : QGuiApplication::screens()) {
+    const QRect intersection =
+      screen->availableGeometry().intersected(windowGeom);
+    if (intersection.width() >= 100 && intersection.height() >= 50)
+      return; // window is accessible — nothing to do
+  }
+
+  QScreen* primaryScreen = QGuiApplication::primaryScreen();
+  // We should always have a primary screen, but just in case
+  if (primaryScreen) {
+    const QRect primary = primaryScreen->availableGeometry();
+    move(primary.topLeft() + QPoint(20, 20));
+  }
 }
 
 void MainWindow::openFile()
@@ -1266,6 +1308,138 @@ void MainWindow::cleanupCurrentAutosave()
       // Don't break - there might be multiple autosaves for untitled documents
     }
   }
+}
+
+static bool copyDirectoryRecursively(const QString& srcPath,
+                                     const QString& dstPath)
+{
+  QDir srcDir(srcPath);
+  if (!srcDir.exists())
+    return false;
+
+  if (!QDir().mkpath(dstPath))
+    return false;
+
+  const QStringList entries =
+    srcDir.entryList(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
+  QDir dstDir(dstPath);
+  for (const QString& entry : entries) {
+    const QString src = srcDir.filePath(entry);
+    const QString dst = dstDir.filePath(entry);
+    if (QFileInfo(src).isDir()) {
+      if (!copyDirectoryRecursively(src, dst))
+        return false;
+    } else {
+      if (!QFile::copy(src, dst))
+        return false;
+    }
+  }
+  return true;
+}
+
+void MainWindow::loadPackages()
+{
+  // Writable user plugin directory (create if needed)
+  const QString writablePluginsDir =
+    QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) +
+    QStringLiteral("/plugins");
+  QDir().mkpath(writablePluginsDir);
+
+  // Bundled (potentially read-only) plugin directory relative to the app
+  const QString bundledPluginsDir =
+    QCoreApplication::applicationDirPath() + QStringLiteral("/../") +
+    QtGui::Utilities::libraryDirectory() + QStringLiteral("/avogadro2/plugins");
+
+  // Copy bundled packages to the writable location if not already present.
+  // This handles read-only filesystems (AppImage, admin installs, etc.) in
+  // which pixi/pip cannot create .pixi/.venv environments in the bundled path.
+  QDir bundledDir(bundledPluginsDir);
+  if (bundledDir.exists()) {
+    const QStringList subdirs =
+      bundledDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    for (const QString& subdir : subdirs) {
+      const QString srcPath = bundledDir.absoluteFilePath(subdir);
+      // Only copy directories that look like packages
+      if (!QDir(srcPath).exists(QStringLiteral("pyproject.toml")))
+        continue;
+      const QString dstPath = writablePluginsDir + QLatin1Char('/') + subdir;
+      if (!QDir(dstPath).exists()) {
+#ifndef NDEBUG
+        qDebug() << "Copying bundled package" << subdir
+                 << "to writable location";
+#endif
+        if (!copyDirectoryRecursively(srcPath, dstPath)) {
+          qWarning() << "Failed to copy bundled package" << srcPath << "to"
+                     << dstPath;
+        }
+      }
+    }
+  }
+
+  // Scan writable AppLocalDataLocation/plugins paths for new packages.
+  // The bundled path is intentionally excluded — packages are copied above.
+  QStringList dirs;
+  const QStringList stdPaths =
+    QStandardPaths::standardLocations(QStandardPaths::AppLocalDataLocation);
+  for (const QString& dirStr : stdPaths) {
+    dirs << dirStr + QStringLiteral("/plugins");
+  }
+
+  QtGui::PackageManager* pkgManager = QtGui::PackageManager::instance();
+  QStringList newPackages;
+  for (const QString& dir : dirs) {
+#ifndef NDEBUG
+    qDebug() << "Checking for packages in" << dir;
+#endif
+    newPackages.append(pkgManager->scanDirectory(dir));
+  }
+
+  // Filter out packages in non-writable directories (can't create .pixi/.venv)
+  QStringList writablePackages;
+  for (const QString& dir : newPackages) {
+    if (QFileInfo(dir).isWritable())
+      writablePackages << dir;
+  }
+  newPackages = writablePackages;
+
+  // If there are new or updated packages, ask the user before installing
+  if (!newPackages.isEmpty()) {
+    QStringList packageNames;
+    foreach (const QString& dir, newPackages) {
+      packageNames << QFileInfo(dir).baseName();
+    }
+
+    QMessageBox msgBox(this);
+    msgBox.setWindowTitle(tr("Let’s finish your setup"));
+    QString text(tr("Avogadro can generate input files for Gaussian, ORCA, "
+                    "and other computational chemistry packages."));
+
+#ifdef Q_OS_MAC || Q_OS_WIN
+    text.append(
+      tr("This requires setup that will download and configure Python."));
+#else
+    text.append(tr("This requires setup to configure a Python environment."));
+#endif
+
+    msgBox.setText(text);
+    msgBox.setInformativeText(tr("This may require an Internet connection."));
+
+#ifndef Q_OS_MAC
+    // somehow on macOS this results in a non-native dialog
+    msgBox.setIcon(QMessageBox::Question);
+#endif
+    msgBox.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+    msgBox.setDefaultButton(QMessageBox::Yes);
+    if (msgBox.exec() == QMessageBox::Yes) {
+      pkgManager->installPackages(newPackages);
+    }
+  }
+
+  // Load cached registrations so consumer plugins get their signals
+#ifndef NDEBUG
+  qDebug() << "Load registered packages";
+#endif
+  pkgManager->loadRegisteredPackages();
 }
 
 void MainWindow::checkAutosaveRecovery()

@@ -68,6 +68,8 @@ void MenuBuilder::addAction(const QStringList& pathList, QAction* action,
 {
   QString path(pathList.join("|"));
   if (m_menuActions.contains(path)) {
+    if (m_menuActions[path].contains(action))
+      return; // already registered, skip duplicate
 #ifdef Q_OS_MAC
     // If we're on Mac, don't show icons by default
     if (!m_showIcons) {
@@ -89,7 +91,21 @@ void MenuBuilder::addAction(const QStringList& pathList, QAction* action,
     if (hasPriority)
       priority = newPriority;
   }
+
+  // On first registration of this action, arrange for it to be removed from
+  // our maps when it is destroyed (e.g. via deleteLater in unregisterFeature).
+  if (!m_priorities.contains(action)) {
+    connect(action, &QObject::destroyed, this,
+            [this](QObject* obj) { removeAction(static_cast<QAction*>(obj)); });
+  }
   m_priorities[action] = priority;
+}
+
+void MenuBuilder::removeAction(QAction* action)
+{
+  m_priorities.remove(action);
+  for (auto& list : m_menuActions)
+    list.removeAll(action);
 }
 
 void MenuBuilder::buildMenuBar(QMenuBar* menuBar)
@@ -206,9 +222,11 @@ void MenuBuilder::buildMenu(QMenu* menu, const QString& path)
       bool replacedItem = false;
       foreach (QAction* action, menu->actions()) {
         if (action->text() == text.text) {
-          // insert the new action and then remove the old one
-          menu->insertAction(action, actions[text.text]);
-          menu->removeAction(action);
+          if (action != actions[text.text]) {
+            // insert the new action and then remove the old one
+            menu->insertAction(action, actions[text.text]);
+            menu->removeAction(action);
+          }
           replacedItem = true;
           break;
         }
